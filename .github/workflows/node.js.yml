@@ -18,15 +18,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      # --- 设置 Node.js 并启用 pnpm ---
+      - name: Setup Node.js with pnpm
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: "pnpm"
 
-      - name: Enable pnpm via corepack
+      - name: Enable corepack for pnpm
         run: corepack enable
 
+      - name: Verify pnpm
+        run: pnpm --version
+
+      # --- 获取最新 n8n release tag ---
       - name: Get latest release tag
         id: latest_release
         run: |
@@ -45,11 +50,13 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
+      # --- 克隆 n8n 仓库 ---
       - name: Clone n8n
         if: steps.check_tag.outputs.exists == 'false'
         run: git clone -b master --single-branch --filter=blob:none https://github.com/n8n-io/n8n ./n8n
 
-      - name: check n8n editor-ui is old
+      # --- 判断 editor-ui 目录新旧 ---
+      - name: Check editor-ui directory
         id: editorui_dir
         run: |
           DIR_PATH="./n8n/packages/frontend/editor-ui"
@@ -63,10 +70,12 @@ jobs:
             echo "dir=$FALLBACK_DIR" >> $GITHUB_OUTPUT
           fi
 
+      # --- 拷贝语言文件 ---
       - name: Move editor-ui i18n language
         if: steps.check_tag.outputs.exists == 'false'
         run: cp -r ./languages/* ${{ steps.editorui_dir.outputs.dir }}/@n8n/i18n/src/locales/
 
+      # --- Patch ---
       - name: Patch New editor-ui
         if: steps.editorui_dir.outputs.flag == 'new' && steps.check_tag.outputs.exists == 'false'
         run: git apply ./fix_editor-ui.patch
@@ -77,6 +86,7 @@ jobs:
         run: git apply ./fix_editor-ui.old.patch
         working-directory: ./n8n
 
+      # --- 安装依赖并批准 build scripts ---
       - name: Install dependencies
         run: pnpm install --ignore-scripts=false
         working-directory: ./n8n
@@ -85,22 +95,25 @@ jobs:
         run: pnpm approve-builds
         working-directory: ./n8n
 
-      - name: Pnpm build editor-ui
+      # --- 构建 editor-ui ---
+      - name: Build editor-ui
         if: steps.check_tag.outputs.exists == 'false'
         run: pnpm run build:n8n --filter=@n8n/editor-ui
         working-directory: ./n8n
         env:
           OPENAI_API_KEY: "dummy"
 
-      - name: 打包 dist 产物
+      # --- 打包 dist ---
+      - name: Package dist
         if: steps.check_tag.outputs.exists == 'false'
         run: tar -czvf editor-ui.tar.gz dist
         working-directory: ${{ steps.editorui_dir.outputs.dir }}
 
-      - name: 拷贝 dist 到项目目录
+      - name: Copy dist to project
         if: steps.check_tag.outputs.exists == 'false'
         run: cp -r ${{ steps.editorui_dir.outputs.dir }}/dist ./editor-ui-dist
 
+      # --- 更新 docker-compose.yml 版本 ---
       - name: Update docker-compose.yml version
         if: steps.check_tag.outputs.exists == 'false'
         run: |
@@ -109,7 +122,8 @@ jobs:
           echo "Replacing {version} with $VERSION in docker-compose.yml"
           sed -i "s/{version}/$VERSION/g" ./docker-compose.yml
 
-      - name: 创建 git tag
+      # --- 提交 git tag ---
+      - name: Create git tag
         if: steps.check_tag.outputs.exists == 'false'
         run: |
           TAG="${{ steps.latest_release.outputs.latest }}"
@@ -121,7 +135,8 @@ jobs:
           git push origin $TAG || echo "Tag already exists, skipping push"
         working-directory: .
 
-      - name: 创建 GitHub Release
+      # --- 发布 GitHub Release ---
+      - name: Create GitHub Release
         if: steps.check_tag.outputs.exists == 'false'
         id: create_release
         uses: softprops/action-gh-release@v2
