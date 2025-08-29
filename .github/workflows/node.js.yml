@@ -1,31 +1,32 @@
-name: Build and Release n8n Chinese editor-ui
+name: package editor-ui languages
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *"
-  push:
-    branches:
-      - master
+    - cron: "0 * * * *"
+  workflow_dispatch:
 
 jobs:
-  build-editor-ui:
+  build:
     runs-on: ubuntu-latest
+    environment: test
+    strategy:
+      matrix:
+        node-version: [20.x]
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      # --- 获取最新 n8n release ---
+      - name: Get latest N8N release version
+        id: latest_release
+        run: |
+          LATEST_VERSION=$(curl -s https://api.github.com/repos/n8n-io/n8n/releases/latest | jq -r '.tag_name')
+          echo "latest=$LATEST_VERSION" >> $GITHUB_OUTPUT
 
-      # --- 设置 Node.js ---
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      # --- 设置 Node.js 并启用 pnpm ---
+      - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 20.x
           cache: "pnpm"
 
-      # --- 启用 corepack 并激活 pnpm 10.15 ---
       - name: Enable corepack and activate pnpm
         run: |
           corepack enable
@@ -34,77 +35,103 @@ jobs:
       - name: Verify pnpm
         run: pnpm --version
 
-      # --- 获取最新 n8n release tag ---
-      - name: Get latest release tag
-        id: latest_release
-        run: |
-          LATEST=$(gh release list --repo n8n-io/n8n --limit 1 | awk '{print $1}')
-          echo "latest=$LATEST" >> $GITHUB_OUTPUT
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # --- 检出本地仓库 ---
+      - name: Checkout local
+        uses: actions/checkout@v4
+        with:
+          path: ./n8n-i18n-chinese
 
+      # --- 检查 tag 是否存在 ---
       - name: Check if tag exists
         id: check_tag
         run: |
           TAG="${{ steps.latest_release.outputs.latest }}"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
+          if git ls-remote --tags origin | grep "refs/tags/$TAG$"; then
             echo "exists=true" >> $GITHUB_OUTPUT
           else
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
+        working-directory: ./n8n-i18n-chinese
 
-      # --- 克隆 n8n 仓库 ---
-      - name: Clone n8n
+      - name: Exit if tags exist
+        if: steps.check_tag.outputs.exists == 'true'
+        run: echo "Tags exist, stopping workflow."
+
+      # --- 翻译新字符串 ---
+      - name: Translate New Strings
         if: steps.check_tag.outputs.exists == 'false'
-        run: git clone -b master --single-branch --filter=blob:none https://github.com/n8n-io/n8n ./n8n
+        run: pnpm install && node translate.js
+        working-directory: ./n8n-i18n-chinese/script
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_BASE: ${{ vars.OPENAI_API_BASE }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          OPENAI_API_CONCURRENT: ${{ vars.OPENAI_API_CONCURRENT }}
+
+      # --- 提交翻译 ---
+      - name: Translate Publish Git
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git add languages/* script/en.json || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: auto translate"
+            git push origin
+          fi
+        working-directory: ./n8n-i18n-chinese
+
+      # --- 检出 n8n 仓库 ---
+      - name: Checkout n8n
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: actions/checkout@v4
+        with:
+          repository: n8n-io/n8n
+          ref: ${{ steps.latest_release.outputs.latest }}
+          path: ./n8n
+
+      # --- 安装依赖 ---
+      - name: Install n8n dependencies
+        if: steps.check_tag.outputs.exists == 'false'
+        run: pnpm install --frozen-lockfile
+        working-directory: ./n8n
 
       # --- 判断 editor-ui 目录新旧 ---
-      - name: Check editor-ui directory
+      - name: Check n8n editor-ui is old
         id: editorui_dir
         run: |
           DIR_PATH="./n8n/packages/frontend/editor-ui"
           FALLBACK_DIR="./n8n/packages/editor-ui"
-
           if [ -d "$DIR_PATH" ]; then
             echo "flag=new" >> $GITHUB_OUTPUT
             echo "dir=$DIR_PATH" >> $GITHUB_OUTPUT
           else
             echo "flag=old" >> $GITHUB_OUTPUT
             echo "dir=$FALLBACK_DIR" >> $GITHUB_OUTPUT
-          fi
 
       # --- 拷贝语言文件 ---
       - name: Move editor-ui i18n language
         if: steps.check_tag.outputs.exists == 'false'
-        run: cp -r ./languages/* ${{ steps.editorui_dir.outputs.dir }}/@n8n/i18n/src/locales/
+        run: cp -r ./n8n-i18n-chinese/languages/* ${{ steps.editorui_dir.outputs.dir }}/@n8n/i18n/src/locales/
 
       # --- Patch ---
       - name: Patch New editor-ui
         if: steps.editorui_dir.outputs.flag == 'new' && steps.check_tag.outputs.exists == 'false'
-        run: git apply ./fix_editor-ui.patch
+        run: git apply ./n8n-i18n-chinese/fix_editor-ui.patch
         working-directory: ./n8n
 
       - name: Patch Old editor-ui
         if: steps.editorui_dir.outputs.flag == 'old' && steps.check_tag.outputs.exists == 'false'
-        run: git apply ./fix_editor-ui.old.patch
-        working-directory: ./n8n
-
-      # --- 安装依赖并批准 build scripts ---
-      - name: Install dependencies
-        run: pnpm install --ignore-scripts=false
-        working-directory: ./n8n
-
-      - name: Approve pnpm builds
-        run: pnpm approve-builds
+        run: git apply ./n8n-i18n-chinese/fix_editor-ui.old.patch
         working-directory: ./n8n
 
       # --- 构建 editor-ui ---
-      - name: Build editor-ui
+      - name: Pnpm build editor-ui
         if: steps.check_tag.outputs.exists == 'false'
-        run: pnpm run build:n8n --filter=@n8n/editor-ui
+        run: pnpm run build:n8n --filter=n8n-editor-ui
         working-directory: ./n8n
-        env:
-          OPENAI_API_KEY: "dummy"
 
       # --- 打包 dist ---
       - name: Package dist
@@ -114,7 +141,7 @@ jobs:
 
       - name: Copy dist to project
         if: steps.check_tag.outputs.exists == 'false'
-        run: cp -r ${{ steps.editorui_dir.outputs.dir }}/dist ./editor-ui-dist
+        run: cp -r ${{ steps.editorui_dir.outputs.dir }}/dist ./n8n-i18n-chinese/editor-ui-dist
 
       # --- 更新 docker-compose.yml 版本 ---
       - name: Update docker-compose.yml version
@@ -122,34 +149,32 @@ jobs:
         run: |
           RAW_TAG="${{ steps.latest_release.outputs.latest }}"
           VERSION="${RAW_TAG#n8n@}"
-          echo "Replacing {version} with $VERSION in docker-compose.yml"
-          sed -i "s/{version}/$VERSION/g" ./docker-compose.yml
+          sed -i "s/{version}/$VERSION/g" ./n8n-i18n-chinese/docker-compose.yml
 
-      # --- 提交 git tag ---
-      - name: Create git tag
+      # --- 创建 git tag ---
+      - name: 创建 git tag
         if: steps.check_tag.outputs.exists == 'false'
         run: |
           TAG="${{ steps.latest_release.outputs.latest }}"
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
-          git add -A
+          git add editor-ui-dist docker-compose.yml
           git commit -m "chore: add built editor-ui dist for $TAG" || echo "No changes to commit"
           git tag $TAG
-          git push origin $TAG || echo "Tag already exists, skipping push"
-        working-directory: .
+          git push origin $TAG
+        working-directory: ./n8n-i18n-chinese
 
       # --- 发布 GitHub Release ---
-      - name: Create GitHub Release
+      - name: 创建 GitHub Release
         if: steps.check_tag.outputs.exists == 'false'
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.latest_release.outputs.latest }}
           name: Release editor-ui to ${{ steps.latest_release.outputs.latest }}
-          body: |
-            自动发布的中文语言包版本。
+          body: "自动发布的中文语言包版本。"
           draft: false
           prerelease: false
           files: ${{ steps.editorui_dir.outputs.dir }}/editor-ui.tar.gz
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
