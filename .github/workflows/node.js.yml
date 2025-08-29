@@ -25,11 +25,11 @@ jobs:
           node-version: 20
           cache: "pnpm"
 
-      # --- 手动安装 pnpm 并更新 PATH ---
-      - name: Install pnpm manually
+      # --- 启用 corepack 并激活 pnpm 10.15 ---
+      - name: Enable corepack and activate pnpm
         run: |
-          npm install -g pnpm@10.15.0
-          echo "$(npm bin -g)" >> $GITHUB_PATH
+          corepack enable
+          corepack prepare pnpm@10.15.0 --activate
 
       - name: Verify pnpm
         run: pnpm --version
