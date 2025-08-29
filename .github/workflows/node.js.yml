@@ -18,15 +18,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      # --- 设置 Node.js 并启用 pnpm ---
-      - name: Setup Node.js with pnpm
+      # --- 设置 Node.js ---
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: "pnpm"
 
-      - name: Enable corepack for pnpm
-        run: corepack enable
+      # --- 手动安装 pnpm 并更新 PATH ---
+      - name: Install pnpm manually
+        run: |
+          npm install -g pnpm@10.15.0
+          echo "$(npm bin -g)" >> $GITHUB_PATH
 
       - name: Verify pnpm
         run: pnpm --version
