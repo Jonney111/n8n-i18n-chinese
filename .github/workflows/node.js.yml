@@ -1,9 +1,9 @@
 name: Build and Release n8n Chinese editor-ui
 
 on:
-  workflow_dispatch: # 手动触发
+  workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *" # 每天凌晨 3 点自动检查更新
+    - cron: "0 3 * * *"
   push:
     branches:
       - master
@@ -24,8 +24,8 @@ jobs:
           node-version: 20
           cache: "pnpm"
 
-      - name: Install pnpm
-        run: npm install -g pnpm@10.15.0
+      - name: Enable pnpm via corepack
+        run: corepack enable
 
       - name: Get latest release tag
         id: latest_release
